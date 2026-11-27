@@ -1,0 +1,274 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <meta name="description" content="Consulta em lote da situação de empresas no Simples Nacional e no SIMEI a partir de uma planilha Excel.">
+  <title>Consulta Simples em Lote</title>
+  <style>
+    :root {
+      --fundo: #f4f6f8;
+      --cartao: #ffffff;
+      --texto: #1c2430;
+      --suave: #5b6675;
+      --borda: #d9dee5;
+      --primaria: #0b6b4f;
+      --primaria-hover: #08553f;
+      --primaria-texto: #ffffff;
+      --perigo: #b42318;
+      --aviso-fundo: #fff7e6;
+      --aviso-borda: #f0c36d;
+      --sim: #0b6b4f;
+      --sim-fundo: #e6f4ee;
+      --nao: #475467;
+      --atencao: #9a5b00;
+      --atencao-fundo: #fff4dc;
+      --erro: #b42318;
+      --erro-fundo: #fdecea;
+      --linha-ativa: #eef6ff;
+      --raio: 10px;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root:not([data-theme="light"]) {
+        --fundo: #12161c;
+        --cartao: #1b2129;
+        --texto: #e6e9ee;
+        --suave: #9aa4b2;
+        --borda: #313a46;
+        --primaria: #2fa37c;
+        --primaria-hover: #3bb98e;
+        --primaria-texto: #0d1a14;
+        --perigo: #f97066;
+        --aviso-fundo: #2a2214;
+        --aviso-borda: #7a5a1c;
+        --sim: #5fd3a7;
+        --sim-fundo: #14302a;
+        --nao: #b4bcc8;
+        --atencao: #f5b851;
+        --atencao-fundo: #33270f;
+        --erro: #f97066;
+        --erro-fundo: #3a1a17;
+        --linha-ativa: #1c2a3a;
+      }
+    }
+    :root[data-theme="dark"] {
+      --fundo: #12161c; --cartao: #1b2129; --texto: #e6e9ee; --suave: #9aa4b2; --borda: #313a46;
+      --primaria: #2fa37c; --primaria-hover: #3bb98e; --primaria-texto: #0d1a14; --perigo: #f97066;
+      --aviso-fundo: #2a2214; --aviso-borda: #7a5a1c; --sim: #5fd3a7; --sim-fundo: #14302a; --nao: #b4bcc8;
+      --atencao: #f5b851; --atencao-fundo: #33270f; --erro: #f97066; --erro-fundo: #3a1a17; --linha-ativa: #1c2a3a;
+    }
+
+    * { box-sizing: border-box; }
+    html { -webkit-text-size-adjust: 100%; }
+    body {
+      margin: 0;
+      background: var(--fundo);
+      color: var(--texto);
+      font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    }
+    a { color: var(--primaria); }
+    .conteudo { max-width: 1180px; margin: 0 auto; padding: 0 16px; }
+
+    header.topo { padding: 28px 0 8px; }
+    header h1 { margin: 0 0 4px; font-size: clamp(1.4rem, 3.5vw, 1.9rem); line-height: 1.2; }
+    header p { margin: 0; color: var(--suave); max-width: 70ch; }
+
+    main { display: grid; gap: 16px; padding-top: 16px; padding-bottom: 32px; }
+
+    .aviso {
+      background: var(--aviso-fundo);
+      border: 1px solid var(--aviso-borda);
+      border-radius: var(--raio);
+      padding: 12px 16px;
+      font-size: .94rem;
+    }
+    .aviso p { margin: 4px 0 0; }
+
+    .cartao {
+      background: var(--cartao);
+      border: 1px solid var(--borda);
+      border-radius: var(--raio);
+      padding: 18px 20px;
+      min-width: 0;
+    }
+    .cartao h2 { margin: 0 0 12px; font-size: 1.1rem; display: flex; align-items: center; gap: 10px; }
+    .passo {
+      display: inline-grid; place-items: center;
+      width: 26px; height: 26px; border-radius: 50%;
+      background: var(--primaria); color: var(--primaria-texto);
+      font-size: .85rem; font-weight: 700; flex: none;
+    }
+
+    .zona {
+      display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
+      border: 2px dashed var(--borda);
+      border-radius: var(--raio);
+      padding: 28px 16px;
+      text-align: center;
+      cursor: pointer;
+      transition: border-color .15s, background-color .15s;
+    }
+    .zona:hover, .zona.arrastando, .zona:focus-within { border-color: var(--primaria); background: var(--sim-fundo); }
+    .zona.bloqueada { opacity: .55; cursor: not-allowed; pointer-events: none; }
+    .zona svg { width: 38px; height: 38px; color: var(--primaria); }
+    .zona-titulo { font-weight: 600; }
+    .zona-sub { color: var(--suave); font-size: .92rem; }
+    .oculto {
+      position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+      overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; border: 0;
+    }
+    .dica { margin: 10px 0 0; color: var(--suave); font-size: .92rem; }
+
+    .resumo { margin-top: 12px; padding: 10px 14px; border-radius: 8px; background: var(--sim-fundo); font-size: .94rem; overflow-wrap: anywhere; }
+    .resumo ul { margin: 4px 0 0; padding-left: 20px; }
+    .erro-caixa { margin-top: 12px; padding: 10px 14px; border-radius: 8px; background: var(--erro-fundo); color: var(--erro); font-size: .94rem; }
+
+    .acoes { display: flex; flex-wrap: wrap; gap: 10px; }
+    .botao {
+      appearance: none; border: 1px solid var(--borda); background: var(--cartao); color: var(--texto);
+      border-radius: 8px; padding: 10px 18px; font: inherit; font-weight: 600; cursor: pointer;
+      min-height: 44px;
+    }
+    .botao:hover:not(:disabled) { border-color: var(--primaria); }
+    .botao:disabled { opacity: .5; cursor: not-allowed; }
+    .botao.principal { background: var(--primaria); border-color: var(--primaria); color: var(--primaria-texto); }
+    .botao.principal:hover:not(:disabled) { background: var(--primaria-hover); }
+    .botao.perigo { color: var(--perigo); border-color: var(--perigo); }
+    .botao:focus-visible, .zona:focus-within { outline: 3px solid color-mix(in srgb, var(--primaria) 45%, transparent); outline-offset: 2px; }
+
+    .opcoes { margin-top: 12px; font-size: .92rem; color: var(--suave); }
+    .opcoes summary { cursor: pointer; width: max-content; }
+    .opcoes label { display: inline-flex; align-items: center; gap: 8px; margin-top: 8px; color: var(--texto); flex-wrap: wrap; }
+    .opcoes input { width: 5.5em; padding: 6px 8px; font: inherit; border: 1px solid var(--borda); border-radius: 6px; background: var(--cartao); color: var(--texto); }
+    .opcoes p { margin: 6px 0 0; }
+
+    .progresso { margin-top: 16px; }
+    .trilho { height: 10px; border-radius: 99px; background: var(--borda); overflow: hidden; }
+    .trilho > div { height: 100%; width: 0; background: var(--primaria); transition: width .3s; }
+    #textoProgresso { margin: 8px 0 0; font-weight: 600; }
+    .detalhe { margin: 2px 0 0; color: var(--suave); font-size: .9rem; min-height: 1.4em; }
+
+    .tabela-cab { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 16px; margin-bottom: 10px; }
+    .tabela-cab h2 { margin: 0; }
+    #contagem { color: var(--suave); font-size: .9rem; }
+    .tabela-rolagem { overflow: auto; max-height: 70vh; border: 1px solid var(--borda); border-radius: 8px; -webkit-overflow-scrolling: touch; }
+    table { border-collapse: collapse; width: 100%; font-size: .86rem; }
+    th, td { padding: 8px; border-bottom: 1px solid var(--borda); text-align: left; vertical-align: top; }
+    th { position: sticky; top: 0; background: var(--cartao); z-index: 1; font-weight: 700; box-shadow: 0 1px 0 var(--borda); vertical-align: bottom; }
+    td { min-width: 7.5em; }
+    td.num { min-width: 0; color: var(--suave); font-variant-numeric: tabular-nums; }
+    td.cnpj { min-width: 0; white-space: nowrap; font-variant-numeric: tabular-nums; font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; }
+    td:nth-child(2) { min-width: 9em; }
+    td.obs { min-width: 14em; color: var(--suave); }
+    td.sim { color: var(--sim); font-weight: 600; }
+    td.nao { color: var(--nao); }
+    td.atencao { color: var(--atencao); background: var(--atencao-fundo); }
+    td.erro { color: var(--erro); }
+    tr.invalido td { background: var(--erro-fundo); }
+    tr.consultando td { background: var(--linha-ativa); }
+    tr.pendente td:not(.num):not(.cnpj):not(:nth-child(2)) { color: var(--suave); }
+
+    footer { padding: 0 0 32px; color: var(--suave); font-size: .85rem; }
+    footer p { margin: 4px 0; }
+
+    @media (max-width: 600px) {
+      header.topo { padding-top: 20px; }
+      .cartao { padding: 16px; }
+      .acoes .botao { flex: 1 1 100%; }
+      table { font-size: .8rem; }
+      td.obs { min-width: 14em; }
+    }
+  </style>
+</head>
+<body>
+  <header class="topo">
+    <div class="conteudo">
+      <h1>Consulta do Simples Nacional em lote</h1>
+      <p>Envie uma planilha com as colunas EMPRESA e CNPJ e receba de volta a situação de cada empresa no Simples Nacional e no SIMEI.</p>
+    </div>
+  </header>
+
+  <main class="conteudo">
+    <section class="aviso" aria-label="De onde vêm os dados">
+      <strong>De onde vêm os dados</strong>
+      <p>As informações vêm da base pública de CNPJ da Receita Federal (dados abertos), consultada pelas APIs BrasilAPI, Minha Receita e CNPJá. Essa base é atualizada periodicamente: <b>não é uma consulta em tempo real</b>.
+        Para empresas optantes do Simples, a situação no Regime Regular do IBS e da CBS precisa ser conferida no
+        <a href="https://www8.receita.fazenda.gov.br/SimplesNacional/aplicacoes.aspx?id=21" target="_blank" rel="noopener noreferrer">portal do Simples Nacional</a>.</p>
+    </section>
+
+    <section class="cartao" aria-labelledby="t1">
+      <h2 id="t1"><span class="passo" aria-hidden="true">1</span> Envie a planilha</h2>
+      <label id="zona" class="zona" for="arquivo">
+        <input id="arquivo" class="oculto" type="file" accept=".xlsx,.xlsm,.xls,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M12 17v-6"/><path d="m9.5 13.5 2.5-2.5 2.5 2.5"/>
+        </svg>
+        <span class="zona-titulo">Arraste a planilha .xlsx para cá</span>
+        <span class="zona-sub">ou clique para escolher o arquivo</span>
+      </label>
+      <p class="dica">A primeira aba precisa ter as colunas EMPRESA e CNPJ (em qualquer posição). <a href="#" id="modelo">Baixar planilha modelo</a></p>
+      <div id="resumo" class="resumo" hidden></div>
+      <div id="erro" class="erro-caixa" role="alert" hidden></div>
+    </section>
+
+    <section class="cartao" aria-labelledby="t2">
+      <h2 id="t2"><span class="passo" aria-hidden="true">2</span> Consulte e baixe o resultado</h2>
+      <div class="acoes">
+        <button id="iniciar" class="botao principal" type="button" disabled>Iniciar consulta</button>
+        <button id="cancelar" class="botao perigo" type="button" hidden>Cancelar consulta</button>
+        <button id="baixar" class="botao" type="button" disabled>Baixar planilha</button>
+      </div>
+      <details class="opcoes">
+        <summary>Opções</summary>
+        <label>Pausa entre consultas
+          <input id="pausa" type="number" min="0.5" max="10" step="0.5" value="1.5" inputmode="decimal"> segundos</label>
+        <p>Uma pausa maior evita bloqueio por excesso de consultas. Se uma API pedir para esperar (erro 429), a pausa aumenta sozinha.</p>
+      </details>
+      <div id="progresso" class="progresso" hidden>
+        <div id="barraTrilho" class="trilho" role="progressbar" aria-label="Progresso da consulta" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="barra"></div></div>
+        <p id="textoProgresso" aria-live="polite"></p>
+        <p id="detalhe" class="detalhe"></p>
+      </div>
+    </section>
+
+    <section id="cartaoTabela" class="cartao" aria-labelledby="t3" hidden>
+      <div class="tabela-cab">
+        <h2 id="t3">Resultado</h2>
+        <span id="contagem"></span>
+      </div>
+      <div class="tabela-rolagem" tabindex="0" aria-label="Tabela de resultados (role para os lados no celular)">
+        <table>
+          <thead>
+            <tr>
+              <th scope="col">Linha</th>
+              <th scope="col">EMPRESA</th>
+              <th scope="col">CNPJ</th>
+              <th scope="col">Situação no Simples Nacional</th>
+              <th scope="col">Situação no SIMEI</th>
+              <th scope="col">Situação no Regime Regular do IBS</th>
+              <th scope="col">Situação no Regime Regular da CBS</th>
+              <th scope="col">Observação</th>
+            </tr>
+          </thead>
+          <tbody id="corpo"></tbody>
+        </table>
+      </div>
+    </section>
+  </main>
+
+  <footer class="conteudo">
+    <p>A planilha é lida e gerada no seu próprio navegador; só os números de CNPJ são enviados às APIs públicas (BrasilAPI; reservas: Minha Receita e CNPJá).</p>
+    <p>Este site não acessa o portal da Receita nem passa por captcha: ele usa as cópias públicas dos dados abertos do CNPJ.</p>
+  </footer>
+
+  <script src="https://cdn.sheetjs.com/xlsx-0.20.3/package/dist/xlsx.full.min.js"
+          integrity="sha384-EnyY0/GSHQGSxSgMwaIPzSESbqoOLSexfnSMN2AP+39Ckmn92stwABZynq1JyzdT"
+          crossorigin="anonymous"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"
+          integrity="sha384-+mbV2IY1Zk/X1p/nWllGySJSUN8uMs+gUAN10Or95UBH0fpj6GfKgPmgC5EXieXG"
+          crossorigin="anonymous" referrerpolicy="no-referrer"></script>
+  <script src="js/nucleo.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
