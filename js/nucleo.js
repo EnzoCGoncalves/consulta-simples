@@ -281,6 +281,21 @@
             : `Desenquadrada do SIMEI em ${isoParaBR(mei.nota.data)}`
         );
       }
+      // IBS/CBS: eventos vêm da própria resposta (se a fonte foi a CNPJá) ou da busca extra na CNPJá.
+      const rr = consulta.regimeRegular;
+      const eventos =
+        d.eventosRegimeRegular && d.eventosRegimeRegular.length
+          ? d.eventosRegimeRegular
+          : rr && rr.status === 'ok'
+            ? rr.eventos
+            : [];
+      if (sn.optante && rr) {
+        if (rr.status === 'ok') {
+          obs.push(eventos.length ? 'IBS/CBS: fonte CNPJá' : 'IBS/CBS: nenhuma opção registrada na CNPJá – conferir no portal');
+        } else {
+          obs.push(`IBS/CBS: CNPJá indisponível (${rr.motivo}) – conferir no portal`);
+        }
+      }
       const situacao = normalizarCabecalho(d.situacaoCadastral);
       if (situacao && situacao !== 'ATIVA') obs.push(`Situação cadastral na Receita: ${String(d.situacaoCadastral).toUpperCase()}`);
       obs.push(`Fonte: ${consulta.fonte} – consultado em ${diaBR}`);
@@ -291,8 +306,8 @@
         simples: sn.optante ? TEXTO.simplesSim(isoParaBR(sn.desde)) : TEXTO.simplesNao,
         simei: mei.optante ? TEXTO.meiSim(isoParaBR(mei.desde)) : TEXTO.meiNao,
         // Só quem é do Simples pode optar pelo Regime Regular do IBS/CBS.
-        ibs: sn.optante ? textoRegimeRegular(d.eventosRegimeRegular, 'IBS') : TEXTO.regimeNaoOptante,
-        cbs: sn.optante ? textoRegimeRegular(d.eventosRegimeRegular, 'CBS') : TEXTO.regimeNaoOptante,
+        ibs: sn.optante ? textoRegimeRegular(eventos, 'IBS') : TEXTO.regimeNaoOptante,
+        cbs: sn.optante ? textoRegimeRegular(eventos, 'CBS') : TEXTO.regimeNaoOptante,
         observacao: obs.join('; '),
       };
     }
@@ -466,7 +481,20 @@
       return { ok: false, motivo: `${motivo}, mesmo após ${NOVAS_TENTATIVAS} novas tentativas` };
     }
 
-    /** Tenta a API principal; se falhar (ou não achar o CNPJ), passa para as reservas. */
+    /** Consulta extra na CNPJá só para pegar os eventos do Regime Regular do IBS/CBS. */
+    async function buscarRegimeRegular(cnpj, signal, avisar) {
+      const cnpja = apis.find((a) => a.id === 'cnpja');
+      if (!cnpja) return { status: 'falha', motivo: 'CNPJá não configurada' };
+      const r = await consultarNaApi(cnpja, cnpj, signal, (ev) => avisar(Object.assign({ finalidade: 'ibscbs' }, ev)));
+      if (r.ok) return { status: 'ok', eventos: r.dados.eventosRegimeRegular || [] };
+      return { status: 'falha', motivo: r.naoEncontrado ? 'CNPJ não encontrado na CNPJá' : r.motivo };
+    }
+
+    /**
+     * Tenta a API principal; se falhar (ou não achar o CNPJ), passa para as reservas.
+     * Com ctx.regimeRegular = true, faz uma 2ª consulta na CNPJá para as optantes do Simples
+     * (só o IBS/CBS; o resto continua vindo da API que respondeu).
+     */
     async function consultar(cnpj, ctx) {
       const signal = ctx && ctx.signal;
       const avisar = (ctx && ctx.avisar) || function () {};
@@ -475,7 +503,14 @@
       for (let i = 0; i < apis.length; i++) {
         const api = apis[i];
         const r = await consultarNaApi(api, cnpj, signal, avisar);
-        if (r.ok) return { tipo: 'ok', fonte: api.nome, dados: r.dados, falhas };
+        if (r.ok) {
+          const resultado = { tipo: 'ok', fonte: api.nome, dados: r.dados, falhas };
+          const optante = avaliarPeriodo(r.dados.simples, (ctx && ctx.hoje) || hojeISO()).optante;
+          if (ctx && ctx.regimeRegular && api.id !== 'cnpja' && optante) {
+            resultado.regimeRegular = await buscarRegimeRegular(cnpj, signal, avisar);
+          }
+          return resultado;
+        }
         if (r.naoEncontrado) naoEncontrado = true;
         else falhas.push(`${api.nome}: ${r.motivo}`);
         if (i < apis.length - 1) {

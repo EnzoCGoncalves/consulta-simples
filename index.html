@@ -124,6 +124,9 @@
     .resumo ul { margin: 4px 0 0; padding-left: 20px; }
     .erro-caixa { margin-top: 12px; padding: 10px 14px; border-radius: 8px; background: var(--erro-fundo); color: var(--erro); font-size: .94rem; }
 
+    .opcao-ibs { display: flex; align-items: flex-start; gap: 10px; margin: 0 0 14px; font-size: .92rem; color: var(--suave); cursor: pointer; }
+    .opcao-ibs b { color: var(--texto); }
+    .opcao-ibs input { width: 18px; height: 18px; margin: 2px 0 0; flex: none; accent-color: var(--primaria); cursor: pointer; }
     .acoes { display: flex; flex-wrap: wrap; gap: 10px; }
     .botao {
       appearance: none; border: 1px solid var(--borda); background: var(--cartao); color: var(--texto);
@@ -214,6 +217,11 @@
 
     <section class="cartao" aria-labelledby="t2">
       <h2 id="t2"><span class="passo" aria-hidden="true">2</span> Consulte e baixe o resultado</h2>
+      <label class="opcao-ibs">
+        <input id="ibsCbs" type="checkbox" checked>
+        <span><b>Buscar IBS/CBS na CNPJá</b> para as optantes do Simples. É mais lento: a CNPJá aceita 5 consultas por minuto, então cada optante leva até 12,5 s a mais.
+          Se não houver opção registrada, a coluna continua “Verificar no portal do Simples Nacional”.</span>
+      </label>
       <div class="acoes">
         <button id="iniciar" class="botao principal" type="button" disabled>Iniciar consulta</button>
         <button id="cancelar" class="botao perigo" type="button" hidden>Cancelar consulta</button>

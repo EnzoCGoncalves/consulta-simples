@@ -14,6 +14,7 @@
     cancelar: $('cancelar'),
     baixar: $('baixar'),
     pausa: $('pausa'),
+    ibsCbs: $('ibsCbs'),
     progresso: $('progresso'),
     barra: $('barra'),
     barraTrilho: $('barraTrilho'),
@@ -133,7 +134,9 @@
     const itens = [
       `${estado.linhas.length} ${estado.linhas.length === 1 ? 'linha' : 'linhas'} com dados`,
       `${estado.unicos.length} CNPJ${estado.unicos.length === 1 ? '' : 's'} para consultar` +
-        (estado.unicos.length ? ` (≈ ${formatarDuracao(estimativa)})` : ''),
+        (estado.unicos.length
+          ? ` (≈ ${formatarDuracao(estimativa)}, mais até 12,5 s por optante se a busca de IBS/CBS estiver ligada)`
+          : ''),
     ];
     if (repetidos) itens.push(`${repetidos} repetido${repetidos === 1 ? '' : 's'} (consultado${repetidos === 1 ? '' : 's'} uma vez só)`);
     if (invalidos) itens.push(`${invalidos} CNPJ${invalidos === 1 ? '' : 's'} inválido${invalidos === 1 ? '' : 's'} (não ser${invalidos === 1 ? 'á' : 'ão'} consultado${invalidos === 1 ? '' : 's'})`);
@@ -257,6 +260,7 @@
     else if (faltam) el.iniciar.textContent = `Consultar pendentes (${faltam})`;
     else el.iniciar.textContent = 'Consulta concluída';
     el.baixar.disabled = estado.rodando || !temArquivo || (!estado.executou && estado.unicos.length > 0);
+    el.ibsCbs.disabled = estado.rodando;
     el.zona.classList.toggle('bloqueada', estado.rodando);
     el.arquivo.disabled = estado.rodando;
   }
@@ -274,8 +278,11 @@
   function aviso(ev) {
     const seg = (ms) => Math.ceil(ms / 1000);
     let t = '';
-    if (ev.tipo === 'consultando') t = `Consultando na ${ev.api}…`;
-    else if (ev.tipo === 'espera') t = `Aguardando ${seg(ev.ms)} s para usar a ${ev.api} (limite de 5 consultas por minuto)…`;
+    const ibs = ev.finalidade === 'ibscbs';
+    if (ev.tipo === 'consultando') t = ibs ? `Buscando IBS/CBS na ${ev.api}…` : `Consultando na ${ev.api}…`;
+    else if (ev.tipo === 'espera') {
+      t = `Aguardando ${seg(ev.ms)} s para ${ibs ? 'buscar IBS/CBS na' : 'usar a'} ${ev.api} (limite de 5 consultas por minuto)…`;
+    }
     else if (ev.tipo === 'nova_tentativa') {
       t = `${ev.api}: ${ev.motivo}. Nova tentativa em ${seg(ev.ms)} s (${ev.tentativa} de ${ev.total})…`;
       if (ev.limite && ev.api !== 'CNPJá') {
@@ -330,7 +337,7 @@
 
         let consulta;
         try {
-          consulta = await estado.consultor.consultar(cnpj, { signal, avisar: aviso });
+          consulta = await estado.consultor.consultar(cnpj, { signal, avisar: aviso, regimeRegular: el.ibsCbs.checked });
         } catch (e) {
           if (e && e.name === 'AbortError') throw e;
           consulta = { tipo: 'falha', falhas: [e && e.message ? e.message : 'erro inesperado'] };
