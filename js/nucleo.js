@@ -122,6 +122,35 @@
     return { valido: true, cnpj, alfanumerico: false };
   }
 
+  function cpfValido(cpf) {
+    if (!/^\d{11}$/.test(cpf) || /^(\d)\1{10}$/.test(cpf)) return false;
+    const dv = (n) => {
+      let soma = 0;
+      for (let i = 0; i < n; i++) soma += Number(cpf[i]) * (n + 1 - i);
+      const r = (soma * 10) % 11;
+      return r === 10 ? 0 : r;
+    };
+    return dv(9) === Number(cpf[9]) && dv(10) === Number(cpf[10]);
+  }
+
+  /**
+   * O valor da coluna CNPJ é, na verdade, um CPF (pessoa física)?
+   * 'cpf' = ignorar a linha; 'talvez' = vale como CPF E como CNPJ (consulta como CNPJ);
+   * false = não é CPF.
+   * Cuidado: CNPJ guardado como número perde os zeros iniciais e pode ficar com 11 dígitos,
+   * igual a um CPF. Por isso a decisão usa a máscara e os dígitos verificadores.
+   */
+  function classificarCpf(valor) {
+    const texto = valorCelula(valor).trim();
+    // Escrito como CPF: 123.456.789-09 (também dentro de um texto, como "CPF: 123.456.789-09")
+    if (/^\d{3}\.?\d{3}\.?\d{3}-\d{2}$/.test(texto) || /(^|\D)\d{3}\.\d{3}\.\d{3}-\d{2}(\D|$)/.test(texto)) return 'cpf';
+    if (/[A-Za-z/]/.test(texto)) return false; // letras (CNPJ alfanumérico) ou barra (máscara de CNPJ)
+    const d = texto.replace(/\D/g, '');
+    if (!d || d.length > 11) return false; // 12 a 14 dígitos só pode ser CNPJ
+    if (!cpfValido(d.padStart(11, '0'))) return false;
+    return dvCnpjValido(d.padStart(14, '0')) ? 'talvez' : 'cpf';
+  }
+
   /** 36515322000110 → 36.515.322/0001-10 (só para exibir). */
   function formatarCnpj(cnpj) {
     return /^[0-9A-Z]{12}[0-9]{2}$/.test(cnpj || '')
@@ -131,6 +160,9 @@
 
   // ---------------------------------------------------------------- leitura da planilha
 
+  // Cabeçalhos aceitos quando não há uma coluna chamada só "CNPJ" (planilhas com CPF e CNPJ juntos).
+  const CABECALHOS_MISTOS = ['CPF CNPJ', 'CNPJ CPF', 'CPF OU CNPJ', 'CNPJ OU CPF'];
+
   /** Procura, nas primeiras linhas, a que tem a coluna CNPJ (e, se houver, EMPRESA). */
   function localizarColunas(matriz, maxLinhas) {
     const limite = Math.min(matriz.length, maxLinhas || 30);
@@ -138,11 +170,14 @@
       const linha = matriz[r] || [];
       let iEmpresa = -1;
       let iCnpj = -1;
+      let iMisto = -1;
       for (let c = 0; c < linha.length; c++) {
         const nome = normalizarCabecalho(linha[c]);
         if (nome === 'EMPRESA' && iEmpresa < 0) iEmpresa = c;
         if (nome === 'CNPJ' && iCnpj < 0) iCnpj = c;
+        if (CABECALHOS_MISTOS.includes(nome) && iMisto < 0) iMisto = c;
       }
+      if (iCnpj < 0) iCnpj = iMisto;
       if (iCnpj >= 0) return { linha: r, iEmpresa, iCnpj };
     }
     return null;
@@ -164,14 +199,21 @@
       );
     }
     const linhas = [];
+    const cpfsIgnorados = []; // números das linhas com CPF (pessoa física), que ficam fora do resultado
     for (let r = cab.linha + 1; r < matriz.length; r++) {
       const linha = matriz[r] || [];
       const empresa = cab.iEmpresa >= 0 ? valorCelula(linha[cab.iEmpresa]).trim() : '';
       const cnpjBruto = valorCelula(linha[cab.iCnpj]).trim();
       if (!empresa && !cnpjBruto) continue; // linha em branco
-      linhas.push(Object.assign({ linhaExcel: linhaInicial + r + 1, empresa, cnpjBruto }, tratarCnpj(linha[cab.iCnpj])));
+      const linhaExcel = linhaInicial + r + 1;
+      const cpf = classificarCpf(linha[cab.iCnpj]);
+      if (cpf === 'cpf') {
+        cpfsIgnorados.push(linhaExcel);
+        continue;
+      }
+      linhas.push(Object.assign({ linhaExcel, empresa, cnpjBruto, talvezCpf: cpf === 'talvez' }, tratarCnpj(linha[cab.iCnpj])));
     }
-    return { nomeAba, linhas, temColunaEmpresa: cab.iEmpresa >= 0 };
+    return { nomeAba, linhas, cpfsIgnorados, temColunaEmpresa: cab.iEmpresa >= 0 };
   }
 
   // ---------------------------------------------------------------- interpretação das APIs
@@ -450,18 +492,27 @@
     const tempoLimiteMs = o.tempoLimiteMs || 20000;
     const esperaLimiteMs = o.esperaLimiteMs != null ? o.esperaLimiteMs : 5000; // 429: 5 s, 10 s, 20 s
     const esperaRedeMs = o.esperaRedeMs != null ? o.esperaRedeMs : 3000; // rede: 3 s, 6 s, 12 s
-    const proximaVez = new Map(); // api.id → horário a partir do qual a próxima chamada pode sair
+    const filaDaApi = new Map(); // api.id → promessa com o horário REAL da última chamada
 
-    // Reserva o horário ANTES de esperar: mesmo com várias consultas em paralelo, duas chamadas
-    // nunca pegam o mesmo horário, e o limite da CNPJá (5/min) é sempre respeitado.
+    // Fila rigorosa: cada chamada espera a anterior realmente sair e só então conta o intervalo.
+    // Mesmo com várias consultas em paralelo (e atrasos do relógio do navegador), duas chamadas
+    // à CNPJá nunca saem com menos de 12,5 s de diferença.
     async function aguardarVez(api, signal, avisar) {
       if (!api.intervaloMinimoMs) return;
-      const t = agora();
-      const vez = Math.max(t, proximaVez.has(api.id) ? proximaVez.get(api.id) : t);
-      proximaVez.set(api.id, vez + api.intervaloMinimoMs);
-      if (vez > t) {
-        avisar({ tipo: 'espera', api: api.nome, ms: vez - t });
-        await dormir(vez - t, signal);
+      const anterior = filaDaApi.get(api.id) || Promise.resolve(-Infinity);
+      let liberar;
+      filaDaApi.set(api.id, new Promise((resolve) => (liberar = resolve)));
+      const ultima = await anterior;
+      try {
+        const falta = ultima + api.intervaloMinimoMs - agora();
+        if (falta > 0) {
+          avisar({ tipo: 'espera', api: api.nome, ms: falta });
+          await dormir(falta, signal);
+        }
+        liberar(agora()); // esta chamada sai agora
+      } catch (e) {
+        liberar(ultima); // cancelada: não houve chamada, a fila segue com o horário anterior
+        throw e;
       }
     }
 
@@ -790,6 +841,8 @@
     paraISO,
     isoParaBR,
     dvCnpjValido,
+    cpfValido,
+    classificarCpf,
     tratarCnpj,
     formatarCnpj,
     localizarColunas,

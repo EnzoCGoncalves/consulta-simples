@@ -134,7 +134,13 @@
     try {
       const dados = new Uint8Array(await arquivo.arrayBuffer());
       const lido = N.lerPlanilha(window.XLSX, dados);
-      if (!lido.linhas.length) throw new Error('A planilha não tem nenhuma linha preenchida abaixo do cabeçalho.');
+      if (!lido.linhas.length) {
+        throw new Error(
+          lido.cpfsIgnorados.length
+            ? `A planilha só tem CPFs (${lido.cpfsIgnorados.length}), que são ignorados. Não há CNPJ para consultar.`
+            : 'A planilha não tem nenhuma linha preenchida abaixo do cabeçalho.'
+        );
+      }
       prepararLinhas(arquivo.name, lido);
     } catch (e) {
       mostrarErro(e && e.message ? e.message : 'Não consegui ler esta planilha.');
@@ -179,6 +185,16 @@
     ];
     if (repetidos) itens.push(`${repetidos} ${plural(repetidos, 'repetido (consultado uma vez só)', 'repetidos (consultados uma vez só)')}`);
     if (invalidos) itens.push(`${invalidos} ${plural(invalidos, 'CNPJ inválido (não será consultado)', 'CNPJs inválidos (não serão consultados)')}`);
+    const cpfs = lido.cpfsIgnorados || [];
+    if (cpfs.length) {
+      const quais = cpfs.length > 15 ? `${cpfs.slice(0, 15).join(', ')}…` : cpfs.join(', ');
+      itens.push(
+        `${cpfs.length} ${plural(cpfs.length, 'CPF (pessoa física) ignorado', 'CPFs (pessoa física) ignorados')} — ` +
+          `${plural(cpfs.length, 'linha', 'linhas')} ${quais}; não ${plural(cpfs.length, 'entra', 'entram')} no resultado`
+      );
+    }
+    const talvez = estado.linhas.filter((l) => l.talvezCpf).length;
+    if (talvez) itens.push(`${talvez} ${plural(talvez, 'número vale', 'números valem')} como CPF e como CNPJ: ${plural(talvez, 'será consultado', 'serão consultados')} como CNPJ`);
     if (!lido.temColunaEmpresa) itens.push('Coluna EMPRESA não encontrada: o nome ficará em branco');
     for (const t of itens) {
       const li = document.createElement('li');
@@ -239,6 +255,9 @@
           cols[2] = cols[3] = s.status === 'pendente' ? 'Buscando na CNPJá…' : 'Na fila da CNPJá…';
         }
         obs.push(r.observacao);
+        if (l.talvezCpf && r.tipo === 'nao_encontrado') {
+          obs.push('o número também é um CPF válido: se for pessoa física, pode ignorar esta linha');
+        }
       } else if (estado.cancelado) {
         obs.push('Não consultado (consulta cancelada)');
       } else {
