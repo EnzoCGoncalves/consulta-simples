@@ -218,6 +218,7 @@
     return {
       razaoSocial: c.name || '',
       situacaoCadastral: (j.status && j.status.text) || '',
+      atualizadoEm: paraISO(j.updated),
       simples: regimeCnpja(c.simples),
       mei: regimeCnpja(c.simei),
       eventosRegimeRegular: eventos,
@@ -290,15 +291,29 @@
             ? rr.eventos
             : [];
       if (sn.optante && rr) {
+        const quando = rr.doCache && rr.consultadoEm ? ` (consultado em ${isoParaBR(rr.consultadoEm)}, reaproveitado)` : '';
         if (rr.status === 'ok') {
-          obs.push(eventos.length ? 'IBS/CBS: fonte CNPJá' : 'IBS/CBS: nenhuma opção registrada na CNPJá – conferir no portal');
+          obs.push(
+            eventos.length
+              ? `IBS/CBS: fonte CNPJá${quando}`
+              : `IBS/CBS: nenhuma opção registrada na CNPJá${quando} – conferir no portal`
+          );
+        } else if (rr.status === 'fila' || rr.status === 'pendente') {
+          obs.push('IBS/CBS: consulta na CNPJá ainda em andamento – conferir no portal');
+        } else if (rr.status === 'cancelado') {
+          obs.push('IBS/CBS: não consultado na CNPJá (consulta cancelada) – conferir no portal');
         } else {
           obs.push(`IBS/CBS: CNPJá indisponível (${rr.motivo}) – conferir no portal`);
         }
       }
       const situacao = normalizarCabecalho(d.situacaoCadastral);
       if (situacao && situacao !== 'ATIVA') obs.push(`Situação cadastral na Receita: ${String(d.situacaoCadastral).toUpperCase()}`);
-      obs.push(`Fonte: ${consulta.fonte} – consultado em ${diaBR}`);
+      const atualizacao = d.atualizadoEm ? ` (dados de ${isoParaBR(d.atualizadoEm)})` : '';
+      const consultadoEm = isoParaBR(consulta.consultadoEm) || diaBR;
+      obs.push(
+        `Fonte: ${consulta.fonte}${atualizacao} – consultado em ${consultadoEm}` +
+          (consulta.doCache ? ' (resultado reaproveitado)' : '')
+      );
 
       return {
         tipo: 'ok',
@@ -325,18 +340,21 @@
 
   // ---------------------------------------------------------------- consulta às APIs
 
+  // Ordem de tentativa. A BrasilAPI só repassa a consulta para a Minha Receita (ver services/cnpj.js
+  // no código dela), então a Minha Receita é chamada direto, sem intermediário; a BrasilAPI fica de
+  // reserva caso o acesso direto falhe.
   const APIS = [
-    {
-      id: 'brasilapi',
-      nome: 'BrasilAPI',
-      url: (cnpj) => `https://brasilapi.com.br/api/cnpj/v1/${cnpj}`,
-      interpretar: interpretarPadraoReceita,
-      intervaloMinimoMs: 0,
-    },
     {
       id: 'minhareceita',
       nome: 'Minha Receita',
       url: (cnpj) => `https://minhareceita.org/${cnpj}`,
+      interpretar: interpretarPadraoReceita,
+      intervaloMinimoMs: 0,
+    },
+    {
+      id: 'brasilapi',
+      nome: 'BrasilAPI',
+      url: (cnpj) => `https://brasilapi.com.br/api/cnpj/v1/${cnpj}`,
       interpretar: interpretarPadraoReceita,
       intervaloMinimoMs: 0,
     },
@@ -432,18 +450,25 @@
     const tempoLimiteMs = o.tempoLimiteMs || 20000;
     const esperaLimiteMs = o.esperaLimiteMs != null ? o.esperaLimiteMs : 5000; // 429: 5 s, 10 s, 20 s
     const esperaRedeMs = o.esperaRedeMs != null ? o.esperaRedeMs : 3000; // rede: 3 s, 6 s, 12 s
-    const ultimaChamada = new Map();
+    const proximaVez = new Map(); // api.id → horário a partir do qual a próxima chamada pode sair
+
+    // Reserva o horário ANTES de esperar: mesmo com várias consultas em paralelo, duas chamadas
+    // nunca pegam o mesmo horário, e o limite da CNPJá (5/min) é sempre respeitado.
+    async function aguardarVez(api, signal, avisar) {
+      if (!api.intervaloMinimoMs) return;
+      const t = agora();
+      const vez = Math.max(t, proximaVez.has(api.id) ? proximaVez.get(api.id) : t);
+      proximaVez.set(api.id, vez + api.intervaloMinimoMs);
+      if (vez > t) {
+        avisar({ tipo: 'espera', api: api.nome, ms: vez - t });
+        await dormir(vez - t, signal);
+      }
+    }
 
     async function consultarNaApi(api, cnpj, signal, avisar) {
       let motivo = 'sem resposta';
       for (let tentativa = 0; tentativa <= NOVAS_TENTATIVAS; tentativa++) {
-        const decorrido = agora() - (ultimaChamada.has(api.id) ? ultimaChamada.get(api.id) : -Infinity);
-        if (api.intervaloMinimoMs && decorrido < api.intervaloMinimoMs) {
-          const falta = api.intervaloMinimoMs - decorrido;
-          avisar({ tipo: 'espera', api: api.nome, ms: falta });
-          await dormir(falta, signal);
-        }
-        ultimaChamada.set(api.id, agora());
+        await aguardarVez(api, signal, avisar);
         avisar({ tipo: 'consultando', api: api.nome, tentativa });
 
         const r = await requisitar(fetchFn, api.url(cnpj), signal, tempoLimiteMs);
@@ -485,7 +510,8 @@
     async function buscarRegimeRegular(cnpj, signal, avisar) {
       const cnpja = apis.find((a) => a.id === 'cnpja');
       if (!cnpja) return { status: 'falha', motivo: 'CNPJá não configurada' };
-      const r = await consultarNaApi(cnpja, cnpj, signal, (ev) => avisar(Object.assign({ finalidade: 'ibscbs' }, ev)));
+      const avisarIbs = avisar || function () {};
+      const r = await consultarNaApi(cnpja, cnpj, signal, (ev) => avisarIbs(Object.assign({ finalidade: 'ibscbs' }, ev)));
       if (r.ok) return { status: 'ok', eventos: r.dados.eventosRegimeRegular || [] };
       return { status: 'falha', motivo: r.naoEncontrado ? 'CNPJ não encontrado na CNPJá' : r.motivo };
     }
@@ -520,7 +546,112 @@
       return naoEncontrado ? { tipo: 'nao_encontrado', falhas } : { tipo: 'falha', falhas };
     }
 
-    return { consultar };
+    return {
+      consultar,
+      buscarRegimeRegular: (cnpj, ctx) => buscarRegimeRegular(cnpj, ctx && ctx.signal, ctx && ctx.avisar),
+    };
+  }
+
+  /** A empresa é optante do Simples HOJE (considerando datas de exclusão)? */
+  function optanteHoje(consulta, hoje) {
+    return !!(consulta && consulta.tipo === 'ok' && avaliarPeriodo(consulta.dados.simples, hoje || hojeISO()).optante);
+  }
+
+  // ---------------------------------------------------------------- resultados guardados
+
+  const DIA_MS = 24 * 60 * 60 * 1000;
+
+  /**
+   * Guarda no navegador (localStorage) as respostas já consultadas, para não consultar de novo.
+   * Só guarda respostas corretas (nunca falhas ou "não encontrado") e só reaproveita
+   * as que tiverem até `validadeDias` dias. Tudo protegido por try/catch: se o navegador
+   * bloquear o armazenamento, o site só deixa de reaproveitar.
+   */
+  function criarCache(storage, opcoes) {
+    const o = opcoes || {};
+    const PREFIXO = 'consultaSimples:v1:';
+    const agora = o.agora || (() => Date.now());
+
+    function ler(chave) {
+      try {
+        const v = storage && storage.getItem(PREFIXO + chave);
+        return v ? JSON.parse(v) : null;
+      } catch (e) {
+        return null;
+      }
+    }
+    function gravar(chave, valor) {
+      try {
+        if (storage) storage.setItem(PREFIXO + chave, JSON.stringify(valor));
+      } catch (e) {
+        /* armazenamento cheio ou bloqueado: segue sem guardar */
+      }
+    }
+    function chaves() {
+      const lista = [];
+      try {
+        for (let i = 0; storage && i < storage.length; i++) {
+          const k = storage.key(i);
+          if (k && k.indexOf(PREFIXO) === 0) lista.push(k);
+        }
+      } catch (e) {
+        /* ignora */
+      }
+      return lista;
+    }
+    const valido = (e, dias) => !!(e && typeof e.salvoEm === 'number' && dias > 0 && agora() - e.salvoEm < dias * DIA_MS);
+
+    return {
+      lerConsulta(cnpj, dias) {
+        const e = ler(`s:${cnpj}`);
+        if (!valido(e, dias) || e.tipo !== 'ok' || !e.dados) return null;
+        return { tipo: 'ok', fonte: e.fonte, dados: e.dados, falhas: [], consultadoEm: e.consultadoEm, doCache: true };
+      },
+      gravarConsulta(cnpj, consulta) {
+        if (!consulta || consulta.tipo !== 'ok') return;
+        gravar(`s:${cnpj}`, {
+          tipo: 'ok',
+          fonte: consulta.fonte,
+          dados: consulta.dados,
+          consultadoEm: consulta.consultadoEm,
+          salvoEm: agora(),
+        });
+      },
+      lerIbs(cnpj, dias) {
+        const e = ler(`i:${cnpj}`);
+        if (!valido(e, dias) || e.status !== 'ok') return null;
+        return { status: 'ok', eventos: e.eventos || [], consultadoEm: e.consultadoEm, doCache: true };
+      },
+      gravarIbs(cnpj, rr) {
+        if (!rr || rr.status !== 'ok') return;
+        gravar(`i:${cnpj}`, { status: 'ok', eventos: rr.eventos || [], consultadoEm: rr.consultadoEm, salvoEm: agora() });
+      },
+      /** Apaga o que passou do prazo (ou estiver corrompido). */
+      podar(dias) {
+        for (const k of chaves()) {
+          const e = ler(k.slice(PREFIXO.length));
+          if (!valido(e, Math.max(dias || 0, 7))) {
+            try {
+              storage.removeItem(k);
+            } catch (err) {
+              /* ignora */
+            }
+          }
+        }
+      },
+      limpar() {
+        for (const k of chaves()) {
+          try {
+            storage.removeItem(k);
+          } catch (e) {
+            /* ignora */
+          }
+        }
+      },
+      contar() {
+        return chaves().filter((k) => k.indexOf(`${PREFIXO}s:`) === 0).length;
+      },
+    };
   }
 
   // ---------------------------------------------------------------- geração do .xlsx
@@ -666,8 +797,10 @@
     interpretarPadraoReceita,
     interpretarCnpja,
     montarResultado,
+    optanteHoje,
     esperar,
     criarConsultor,
+    criarCache,
     gerarXlsx,
     formatarXlsx,
     nomeArquivoResultado,

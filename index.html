@@ -150,6 +150,13 @@
     .trilho { height: 10px; border-radius: 99px; background: var(--borda); overflow: hidden; }
     .trilho > div { height: 100%; width: 0; background: var(--primaria); transition: width .3s; }
     #textoProgresso { margin: 8px 0 0; font-weight: 600; }
+    .bloco-ibs { margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--borda); }
+    .trilho.fino { height: 6px; }
+    .trilho.fino > div { background: var(--atencao); }
+    .texto-ibs { margin: 6px 0 0; font-weight: 600; font-size: .94rem; }
+    .link-botao { appearance: none; border: 0; background: none; padding: 0; font: inherit; color: var(--primaria); text-decoration: underline; cursor: pointer; }
+    .link-botao:disabled { color: var(--suave); text-decoration: none; cursor: default; }
+    td.aguardando { color: var(--suave); font-style: italic; }
     .detalhe { margin: 2px 0 0; color: var(--suave); font-size: .9rem; min-height: 1.4em; }
 
     .tabela-cab { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: 4px 16px; margin-bottom: 10px; }
@@ -195,7 +202,7 @@
   <main class="conteudo">
     <section class="aviso" aria-label="De onde vêm os dados">
       <strong>De onde vêm os dados</strong>
-      <p>As informações vêm da base pública de CNPJ da Receita Federal (dados abertos), consultada pelas APIs BrasilAPI, Minha Receita e CNPJá. Essa base é atualizada periodicamente: <b>não é uma consulta em tempo real</b>.
+      <p>As informações vêm da base pública de CNPJ da Receita Federal (dados abertos), consultada pela API Minha Receita (reservas: BrasilAPI e CNPJá). Essa base é atualizada periodicamente: <b>não é uma consulta em tempo real</b>.
         Para empresas optantes do Simples, a situação no Regime Regular do IBS e da CBS precisa ser conferida no
         <a href="https://www8.receita.fazenda.gov.br/SimplesNacional/aplicacoes.aspx?id=21" target="_blank" rel="noopener noreferrer">portal do Simples Nacional</a>.</p>
     </section>
@@ -219,7 +226,7 @@
       <h2 id="t2"><span class="passo" aria-hidden="true">2</span> Consulte e baixe o resultado</h2>
       <label class="opcao-ibs">
         <input id="ibsCbs" type="checkbox" checked>
-        <span><b>Buscar IBS/CBS na CNPJá</b> para as optantes do Simples. É mais lento: a CNPJá aceita 5 consultas por minuto, então cada optante leva até 12,5 s a mais.
+        <span><b>Buscar IBS/CBS na CNPJá</b> para as optantes do Simples. Roda numa fila própria, em paralelo: o Simples fica pronto antes, mas a CNPJá aceita só 5 consultas por minuto (≈ 12,5 s por optante).
           Se não houver opção registrada, a coluna continua “Verificar no portal do Simples Nacional”.</span>
       </label>
       <div class="acoes">
@@ -229,14 +236,26 @@
       </div>
       <details class="opcoes">
         <summary>Opções</summary>
+        <label>Consultas ao mesmo tempo
+          <input id="simultaneas" type="number" min="1" max="5" step="1" value="3" inputmode="numeric"></label>
         <label>Pausa entre consultas
-          <input id="pausa" type="number" min="0.5" max="10" step="0.5" value="1.5" inputmode="decimal"> segundos</label>
-        <p>Uma pausa maior evita bloqueio por excesso de consultas. Se uma API pedir para esperar (erro 429), a pausa aumenta sozinha.</p>
+          <input id="pausa" type="number" min="0" max="10" step="0.5" value="0.5" inputmode="decimal"> segundos</label>
+        <p>Se uma API pedir para esperar (erro 429), o site passa sozinho a consultar uma por vez e aumenta a pausa.</p>
+        <label>Reaproveitar resultados consultados há até
+          <input id="reaproveitar" type="number" min="0" max="7" step="1" value="3" inputmode="numeric"> dias</label>
+        <p>Vale para Simples, SIMEI e IBS/CBS. CNPJs já consultados nesse prazo saem na hora, com a data da consulta original na Observação. Use 0 para consultar tudo de novo.
+          Falhas e “não encontrado” nunca são reaproveitados.</p>
+        <p><span id="infoCache"></span> <button id="limparCache" class="link-botao" type="button">Apagar resultados guardados</button></p>
       </details>
       <div id="progresso" class="progresso" hidden>
-        <div id="barraTrilho" class="trilho" role="progressbar" aria-label="Progresso da consulta" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="barra"></div></div>
+        <div id="barraTrilho" class="trilho" role="progressbar" aria-label="Progresso do Simples e SIMEI" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="barra"></div></div>
         <p id="textoProgresso" aria-live="polite"></p>
         <p id="detalhe" class="detalhe"></p>
+        <div id="blocoIbs" class="bloco-ibs" hidden>
+          <div id="barraIbsTrilho" class="trilho fino" role="progressbar" aria-label="Progresso do IBS/CBS na CNPJá" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><div id="barraIbs"></div></div>
+          <p id="textoIbs" class="texto-ibs" aria-live="polite"></p>
+          <p id="detalheIbs" class="detalhe"></p>
+        </div>
       </div>
     </section>
 
@@ -266,7 +285,7 @@
   </main>
 
   <footer class="conteudo">
-    <p>A planilha é lida e gerada no seu próprio navegador; só os números de CNPJ são enviados às APIs públicas (BrasilAPI; reservas: Minha Receita e CNPJá).</p>
+    <p>A planilha é lida e gerada no seu próprio navegador; só os números de CNPJ são enviados às APIs públicas (Minha Receita; reservas: BrasilAPI e CNPJá). Os resultados reaproveitáveis ficam guardados só neste navegador.</p>
     <p>Este site não acessa o portal da Receita nem passa por captcha: ele usa as cópias públicas dos dados abertos do CNPJ.</p>
   </footer>
 
